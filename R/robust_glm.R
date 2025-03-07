@@ -137,7 +137,7 @@ robust_glm <- function(formula, data, subset = NULL, family = "quasibinomial",
   fit$collinear_terms <- collinear_terms
 
   # Add class robust_glm
-  class(fit) <- c(class(fit), "robust_glm")
+  class(fit) <- c("robustglm", class(fit))
 
   # Step forward the progressor bar
   if (!is.null(p) && inherits(p, "progressor")) p()
@@ -147,16 +147,20 @@ robust_glm <- function(formula, data, subset = NULL, family = "quasibinomial",
 
 #' @export
 get_response <- function(formula) {
-  if (class(formula) != "formula") {
-    stop("Not formula object")
+  if (inherits(formula, c("lm", "glm", "robustglm"))) {
+    formula <- formula$formula
+  } else if(!inherits(formula, "formula")) {
+    stop("Not formula or model object")
   }
   all.vars(formula[[length(formula) - 1]])
 }
 
 #' @export
 get_covs <- function(formula) {
-  if (class(formula) != "formula") {
-    stop("Not formula object")
+  if (inherits(formula, c("lm", "glm", "robustglm"))) {
+    formula <- formula$formula
+  } else if(!inherits(formula, "formula")) {
+    stop("Not formula or model object")
   }
   all.vars(formula[[length(formula)]])
 }
