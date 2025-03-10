@@ -60,8 +60,8 @@ tidy_terms <- function(model, id = NULL, exponentiate = F) {
     if (!inherits(mod, c("lm", "glm"))) {
       stop("model must be a valid 'lm' or 'glm' object.")
     }
-    if (!inherits(mod, "robust_glm")) {
-      stop("model must be of class robust_glm.")
+    if (!inherits(mod, "robustglm")) {
+      stop("model must be of class 'robustglm'.")
     }
 
     # Check if mod contains ci and sandwich, and they are not NA
@@ -153,8 +153,8 @@ tidy_model <- function(model, id = NULL, ...) {
     if (!inherits(mod, "lm") && !inherits(mod, "glm")) {
       stop("Model must be a valid 'lm' or 'glm' object.")
     }
-    if (!inherits(mod, "robust_glm")) {
-      stop("model must be of class robust_glm.")
+    if (!inherits(mod, "robustglm")) {
+      stop("model must be of class 'robustglm'.")
     }
 
     # Extract summary statistics from the model object
