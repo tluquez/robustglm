@@ -191,3 +191,50 @@ predict.robust_glm <- function(object, newdata = NULL,
 
   return(preds)
 }
+
+#' Get Predicted Values from a Model
+#'
+#' This function calculates predicted values from a fitted model, setting covariates
+#' to their median (for numeric variables) or mode (for categorical variables).
+#'
+#' @param mod A fitted model object, such as from `glm`, `lm`, or `robust_glm`.
+#' @param exclude_cols Columns in `mod$data` to exclude from transformation. A
+#'  tidyselect specification.
+#' @return A tibble with linear predictors, predicted outcome, and standard
+#'  errors of the predicted outcome.
+#' @importFrom dplyr mutate across matches select rename
+#' @importFrom tibble tibble
+#' @export
+
+get_predicted <- function(mod, exclude_cols = NULL, type = "link") {
+
+  if (!"data" %in% names(mod)) {
+    stop("The provided model does not contain a 'data' component.")
+  }
+  if (!inherits(mod, c("glm", "lm", "robustglm"))) {
+    stop("The model must be of class 'glm', 'lm', or 'robustglm'.")
+  }
+
+  # Compute new_data with median/mode for covariates
+  new_data <- mod$data %>%
+    dplyr::mutate(dplyr::across(
+      .cols = -dplyr::any_of({{ exclude_cols }}),
+      .fns = ~ if (is.numeric(.)) {median(., na.rm = T)} else {Mode(.)}
+    ))
+
+  # Compute predictions
+  preds <- if (inherits(mod, "robustglm")) {
+    robustglm:::predict.robust_glm(mod, newdata = new_data, type = type,
+                                   se.fit = T)
+  } else {
+    predict(mod, newdata = new_data, type = type, se.fit = T)
+  }
+
+  # Format output tibble
+  tibble::tibble(
+    linear_predictor = mod$linear.predictors,
+    y_predicted = preds$fit,
+    y_predicted_se = preds$se.fit,
+    row_names = rownames(mod$data)
+  )
+}

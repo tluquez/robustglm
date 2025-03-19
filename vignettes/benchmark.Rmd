@@ -1,0 +1,82 @@
+---
+title: "Benchmarking robust GLM"
+author: "Tain Luquez"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Benchmarking robust GLM}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+```{r}
+library(Seurat)
+get_pbmc3k_data() %>% NormalizeData %>% RunNMF -> pbmc3k
+
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(microbenchmark)
+library(sccomp)
+library(scSCODA)
+library(ANCOMBC)
+library(robustbase) # Ensure robust_glm dependencies are loaded
+
+# Define function to benchmark models
+benchmark_models <- function(data, formula, permute_var, family = binomial()) {
+  set.seed(42) # For reproducibility
+  
+  # Permute the covariate
+  data_permuted <- data %>%
+    mutate(!!sym(permute_var) := sample(!!sym(permute_var)))
+
+  # Fit models
+  results <- microbenchmark(
+    robust_glm = robust_glm(formula, data_permuted, family = "quasibinomial"),
+    basic_glm = glm(formula, data = data_permuted, family = family),
+    sccomp = sccomp::sccomp_glm(formula, data_permuted),
+    scSCODA = scSCODA::scSCODA_fit(data_permuted, formula),
+    ancombc2 = ancombc2(data_permuted, formula),
+    times = 10 # Adjust repetitions as needed
+  )
+
+  # Extract estimates
+  extract_coefs <- function(model) {
+    if ("glm" %in% class(model)) {
+      return(coef(summary(model)))
+    } else if ("robust_glm" %in% class(model)) {
+      return(model$sandwich[, c("estimate", "std.error", "p.value")])
+    } else {
+      return(NULL) # Adjust based on method-specific output
+    }
+  }
+
+  coefs <- list(
+    robust_glm = extract_coefs(robust_glm(formula, data_permuted, family = "quasibinomial")),
+    basic_glm = extract_coefs(glm(formula, data = data_permuted, family = family))
+    # Add extraction for other models if needed
+  )
+
+  list(timing = results, coefficients = coefs)
+}
+
+# Example Usage
+df <- tibble(
+  y = rbinom(100, 1, 0.5),
+  x1 = rnorm(100),
+  x2 = rnorm(100),
+  group = sample(c("A", "B"), 100, replace = TRUE)
+)
+
+formula <- y ~ x1 + x2 + group
+benchmarks <- benchmark_models(df, formula, "group")
+
+# View Results
+print(benchmarks$timing)
+print(benchmarks$coefficients)
+
+```
