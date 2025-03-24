@@ -1,10 +1,215 @@
+#' Compute Proportions
+#'
+#' This function computes proportions per id across cluster. It can group by
+#'  supercluster and compute proportions per group(s). It can also add
+#'  supercluster proportions across all its levels. Finally, it summarizes
+#'  other columns of data per grouping columns.
+#'
+#' @param data Data frame containing \code{id} and \code{cluster}.
+#' @param id Character. Column name representing the observations identifier.
+#' @param cluster Character. Column name representing the cluster identifier.
+#' @param supercluster Character. Column name representing the supercluster
+#'  identifier. Optional.
+#' @param by Character. Column name(s) of grouping variables, a.k.a.
+#'  denominators for proportions. Optional.
+#' @param add_supercluster_prop Logical indicating whether to include
+#'  proportions per id across superclusters.
+#' @param add_other_cols Logical indicating whether to summarize other columns of \code{data} by \code{c(id, supercluster, by)}. Numeric columns are summarized
+#' to their mean, factor to the reference level and character to the mode.
+#'
+#' @return A long data frame with computed proportions per group and summary
+#'  statistics.
+#' - \code{"num_cluster"}: The number of occurrences of each group combination.
+#' - \code{"props"}: The proportions of each group combination within its
+#'  supercluster.
+#' - \code{"supercluster"}: The supercluster associated with each group.
+#'
+#' @details This function calculates proportions per group based on the counts of another
+#' column, and summarizes other columns by group, calculating means for numeric columns,
+#' reference levels for factor columns, and the mode for character columns.
+#'
+#' @examples
+#' df <- data.frame(id = rep(1:3, each = 8),
+#'                  cluster = rep(c("C1", "C2"), each = 4, times = 3),
+#'                  supercluster = rep(c("S1", "S2"), each = 4, times = 3),
+#'                  value1 = runif(24),
+#'                  value2 = as.factor(LETTERS[1:12]),
+#'                  value3 = LETTERS[1:12],
+#'                  value4 = NA)
+#' df
+#' get_props(df, "id", "cluster", "supercluster", add_supercluster_prop = T)
+#' get_props(df, "id", "cluster", "supercluster")
+#' get_props(df, "id", "cluster")
+#'
+#' @import dplyr
+#' @import tidyr
+#' @import rlang
+#' @importFrom magrittr %>%
+#'
+#' @export
+#'
+
+get_props <- function(data, id, cluster, supercluster = NULL, by = NULL,
+                      add_supercluster_prop = F, add_other_cols = T) {
+
+  if (!is.data.frame(data)) {
+    stop("Input 'data' must be a data frame.")
+  }
+
+  if (add_supercluster_prop & is.null(supercluster)) {
+    stop("No supercluster column provided when add_supercluster_prop == TRUE.")
+  }
+
+  # Respect existing groups when called in a dplyr pipeline
+  if (dplyr::is_grouped_df(data)) {
+    if (is.null(by)) {
+      by <- dplyr::group_vars(data)
+    }
+    data <- dplyr::ungroup(data)
+  }
+
+  groups <- c(id, cluster)
+  if (!is.null(supercluster)) {
+    groups <- c(groups, supercluster)
+  }
+  if (!is.null(by)) {
+    groups <- c(groups, by)
+  }
+
+  missing_cols <- setdiff(groups, colnames(data))
+  if (length(missing_cols) > 0) {
+    stop("The following columns are missing in the data: ",
+         paste(missing_cols, collapse = ", "))
+  }
+
+  # Count cells and compute proportions
+  margins <- setdiff(groups, cluster)
+  n_cluster <- table(data[groups])
+  prop <- as.data.frame(prop.table(n_cluster, margin = margins))
+  n_cluster <- as.data.frame(n_cluster)
+  colnames(prop)[colnames(prop) == "Freq"] <- "prop"
+  colnames(n_cluster)[colnames(n_cluster) == "Freq"] <- paste0("num_", cluster)
+  props <- merge(n_cluster, prop, by = groups)
+
+  # Exclude non-existing combinations
+  props <- props[!is.nan(props$prop) & !is.nan(props$prop), ]
+
+  if (!is.null(supercluster) & add_supercluster_prop) {
+    # Count cells per id across superclusters and compute proportions
+    if(supercluster %in% groups) {
+      groups_supercluster <- setdiff(groups, cluster)
+    } else {
+      # For consistency, ensure id and supercluster are the first two variables
+      groups_supercluster <- c(id, supercluster, setdiff(groups, c(id, cluster)))
+    }
+    margins_supercluster <- setdiff(groups_supercluster, supercluster)
+    n_supercluster <- table(data[groups_supercluster])
+    prop_supercluster <- as.data.frame(prop.table(
+      n_supercluster, margin = margins_supercluster))
+    n_supercluster <- as.data.frame(n_supercluster)
+    colnames(prop_supercluster)[colnames(prop_supercluster) == "Freq"] <- "prop"
+    props_supercluster <- merge(n_supercluster, prop_supercluster,
+                                by = groups_supercluster)
+
+    # Exclude non-existing combinations
+    props_supercluster <- props_supercluster[
+      !is.nan(props_supercluster$prop) & !is.nan(props_supercluster$prop), ]
+
+    # Add supercluster proportions as tho they are cluster props
+    colnames(props_supercluster)[colnames(props_supercluster) == "Freq"] <-
+      paste0("num_", cluster)
+    colnames(props_supercluster)[
+      colnames(props_supercluster) == supercluster] <- cluster
+    props_supercluster[supercluster] <- supercluster
+    props <- rbind(props, props_supercluster, make.row.names = F)
+  }
+
+  # Convert columns to original class
+  props[[id]] <- as(props[[id]], class(data[[id]]))
+  props[[cluster]] <- as(props[[cluster]], class(data[[cluster]]))
+  if (!is.null(supercluster)) {
+    props[[supercluster]] <- as(props[[supercluster]],
+                                class(data[[supercluster]]))
+  }
+
+  # Add other columns if required, excluding grouping columns
+  if (add_other_cols) {
+    other_columns <- setdiff(names(data), groups)
+    if (length(other_columns) > 0) {
+      df <- summarize_by_group(data, groups, other_columns)
+      props <- merge(props, df, by = id)
+    }
+  }
+
+  # **Checks**
+
+  ## Ensure no new non-zero id-cluster combinations were created
+  original_combs <- dplyr::distinct(data[groups])
+  result_combs <- props[props[paste0("num_", cluster)] > 0, groups]
+  if (!is.null(supercluster) & add_supercluster_prop) {
+    result_combs <- result_combs[result_combs[supercluster] != supercluster,
+                                 groups]
+  }
+  new_combs <- dplyr::anti_join(result_combs, original_combs,
+                                by = groups)
+
+  if (nrow(new_combs) > 0) {
+    stop("Unexpected id x cluster x by x (supercluster) combinations.")
+  }
+
+  ## Ensure proportions sum to ~1 (allow for minor floating-point errors)
+  props_sum <- props %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(margins))) %>%
+    dplyr::summarize(n = round(sum(prop), 5), .groups = "drop") %>%
+    dplyr::filter(n != 0) %>%
+    dplyr::pull(n) %>%
+    unique()
+
+  if (any(abs(props_sum - 1) > 0.001)) {
+    stop("Proportions do not sum to 1.")
+  }
+
+  ## Ensure supercluster proportions sum to 1 per id
+  if (!is.null(supercluster) && add_supercluster_prop) {
+    supercluster_props_sum <- props %>%
+      dplyr::filter(!!rlang::sym(supercluster) == !!supercluster) %>%
+      dplyr::group_by(dplyr::across(dplyr::all_of(groups_supercluster))) %>%
+      dplyr::summarize(n = round(sum(prop), 5), .groups = "drop") %>%
+      dplyr::pull(n) %>%
+      unique()
+
+    if (any(abs(supercluster_props_sum - 1) > 0.001)) {
+      stop("Supercluster proportions do not sum to 1.")
+    }
+  }
+
+  ## Ensure id, cluster and supercluster levels are preserved
+  for (col in groups) {
+    if (!is.null(col) && any(!unique(data[[col]]) %in% unique(props[[col]]))) {
+      stop("Column '", col, "' lost some unique levels in the output.")
+    }
+  }
+
+  ## Ensure all by groups are preserved
+  if (!is.null(by)) {
+    input_groups <- dplyr::distinct(data, dplyr::across(dplyr::all_of(by)))
+    output_groups <- dplyr::distinct(props, dplyr::across(dplyr::all_of(by)))
+
+    if (nrow(dplyr::anti_join(input_groups, output_groups, by = by)) > 0) {
+      stop("Some groups from 'by' are missing in the output.")
+    }
+  }
+
+  return(props)
+}
+
 #' Summarize data by group
 #'
 #' This function aggregates data by group and summarizes specified columns.
 #'
-#' @param data A data frame.
-#' @param group A character vector specifying the grouping column(s).
-#' @param columns Optional character vector specifying columns to summarize.
+#' @param data Data frame containing \code{group} and \code{columns}.
+#' @param group Character. Vector specifying the grouping column(s).
+#' @param columns Character. Vector specifying column(s) to summarize. Optional.
 #' @return A data frame with summarized data.
 #' @examples
 #' mixed_df <- data.frame(
@@ -29,6 +234,9 @@
 #' # Summarize two columns by Group
 #' summarize_by_group(mixed_df, "Group", c("Numeric_Value", "Factor_Value"))
 #'
+#' @import dplyr
+#' @importFrom purrr map imap compact
+#'
 #' @export
 
 summarize_by_group <- function(data, group, columns = NULL) {
@@ -50,12 +258,12 @@ summarize_by_group <- function(data, group, columns = NULL) {
 
   # If no columns to summarize, return unique combinations of group columns
   if (length(columns) == 0) {
-    df <- dplyr::distinct(data, dplyr::across(tidyselect::all_of(group)))
+    df <- dplyr::distinct(data, dplyr::across(dplyr::all_of(group)))
   }
 
   # If columns need to be summarized, summarize columns by group
   df <- data %>%
-    dplyr::group_by(dplyr::across(tidyselect::all_of(group))) %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(group))) %>%
     dplyr::summarize(
       dplyr::across(
         dplyr::all_of(columns),
@@ -66,166 +274,50 @@ summarize_by_group <- function(data, group, columns = NULL) {
           else if (is.character(.)) unique(.)[which.max(table(.))]
           else if (is.logical(.)) unique(.)[which.max(table(.))]
           else if (inherits(., c("Date", "POSIXt"))) as.character(unique(.))[1]
-          else if (is.list(.)) NA
-          else if (is.complex(.)) NA
+          else if (is.list(.) || is.complex(.)) NA
           else NA
         }
       ),
-      .groups = "drop_last"
+      .groups = "drop"
     ) %>%
     dplyr::ungroup()
 
-  return(df)
-}
+  # **Checks**
 
-#' Compute Proportions
-#'
-#' This function computes proportions per id across cluster. It can group by
-#'  supercluster and compute proportions per group. It can also add
-#'  supercluster proportions across all its levels. Finally, it summarizes
-#'  other columns of data per id.
-#'
-#' @param data Data frame containing \code{id} and \code{cluster}.
-#' @param id The column name representing the observations identifier.
-#' @param cluster The column name representing the cluster identifier.
-#' @param supercluster Optional. The column name representing the supercluster
-#'  identifier.
-#' @param add_supercluster_prop Logical indicating whether to
-#'  include proportions per id across superclusters.
-#' @param add_other_cols Logical indicating whether to summarize other columns of \code{data} by \code{id}. Numeric columns are summarized to their mean, factor to the reference level and character to the mode.
-#'
-#' @return A long data frame with computed proportions per group and summary
-#'  statistics.
-#' - \code{"num_cluster"}: The number of occurrences of each group combination.
-#' - \code{"props"}: The proportions of each group combination within its
-#'  supercluster.
-#' - \code{"supercluster"}: The supercluster associated with each group.
-#' - \code{"num_supercluster"}: The total number of occurrences of each
-#'  \code{supercluster}-\code{id} combination.
-#'
-#' @details This function calculates proportions per group based on the counts of another
-#' column, and summarizes other columns by group, calculating means for numeric columns,
-#' reference levels for factor columns, and the mode for character columns.
-#'
-#' @examples
-#' df <- data.frame(id = rep(1:3, each = 8),
-#'                  cluster = rep(c("C1", "C2"), each = 4, times = 3),
-#'                  supercluster = rep(c("S1", "S2"), each = 4, times = 3),
-#'                  value1 = runif(24),
-#'                  value2 = as.factor(LETTERS[1:12]),
-#'                  value3 = LETTERS[1:12],
-#'                  value4 = NA)
-#' df
-#' get_props(df, "id", "cluster", "supercluster", add_supercluster_prop = T)
-#' get_props(df, "id", "cluster", "supercluster")
-#' get_props(df, "id", "cluster")
-#'
-#' @import dplyr
-#' @import tidyr
-#' @importFrom magrittr %>%
-#'
-#' @export
-#'
-
-get_props <- function(data, id, cluster, supercluster = NULL,
-                      add_supercluster_prop = F, add_other_cols = T) {
-  if (!is.data.frame(data)) {
-    stop("Input 'data' must be a data frame.")
-  }
-
-  # Input Validation
-  required_cols <- c(id, cluster)
-  if (!is.null(supercluster)) {
-    required_cols <- c(required_cols, supercluster)
-  }
-  missing_cols <- setdiff(required_cols, colnames(data))
-  if (length(missing_cols) > 0) {
-    stop("The following columns are missing in the data: ",
-         paste(missing_cols, collapse = ", "))
-  }
-  invalid_args <- c(
-    "id" = !is.character(id),
-    "cluster" = !is.character(cluster),
-    "supercluster" = !is.null(supercluster) && !is.character(supercluster)
-  )
-  invalid_args <- names(invalid_args)[invalid_args]
-  if (length(invalid_args) > 0) {
-    stop("Argument(s) ", paste(invalid_args, collapse = ", "),
-         " must be character vector(s).")
-  }
-
-  # Proportion Calculation
-  if (!is.null(supercluster)) {
-    # Proportions by supercluster x cluster x id
-    data_groups <- split(data, data[[supercluster]])
-    props <- lapply(data_groups, function(data_group) {
-      # Proportion per supercluster by cluster x id
-      nums_cluster <- table(data_group[[id]], data_group[[cluster]])
-      prop <- as.data.frame(prop.table(nums_cluster, margin = 1))
-      nums_cluster <- as.data.frame(nums_cluster)
-
-      # Count observations per supercluster x id
-      nums_supercluster <- data.frame(table(data_group[[id]],
-                                            data_group[[supercluster]]))
-
-      # Left join and rename
-      prop <- merge(nums_cluster, prop, by = c("Var1", "Var2"))
-      prop <- merge(prop, nums_supercluster, by = "Var1")
-      colnames(prop) <- c(id, cluster, paste0("num_", cluster), "prop",
-                          supercluster, paste0("num_", supercluster))
-
-      return(prop)
-    })
-    props <- do.call(rbind, props)
-    rownames(props) <- NULL
-
-    # Add proportions per supercluster column if requested
-    if (add_supercluster_prop) {
-      # Proportion by supercluster x id
-      nums_supercluster <- table(data[[id]], data[[supercluster]])
-      prop <- as.data.frame(prop.table(nums_supercluster, margin = 1))
-      nums_supercluster <- as.data.frame(nums_supercluster)
-
-      # Count observations per id across superclusters
-      nums_id <- data.frame(table(data[[id]]))
-      nums_id$Var2 <- supercluster
-      nums_id <- nums_id[, c("Var1", "Var2", "Freq")]
-
-      # Left join and rename
-      prop <- merge(nums_supercluster, prop, by = c("Var1", "Var2"))
-      prop <- merge(prop, nums_id, by = "Var1")
-      colnames(prop) <- c(id, cluster, paste0("num_", cluster), "prop",
-                          supercluster, paste0("num_", supercluster))
-
-      props <- rbind(props, prop)
+  ## Capture original unique value counts for categorical columns
+  original_levels <- purrr::map(data[columns], function(col) {
+    if (is.character(col) || is.factor(col) || is.logical(col)) {
+      unique(col)
+    } else {
+      NULL
     }
-  } else {
-    # Proportion by cluster x id
-    nums_cluster <- table(data[[id]], data[[cluster]])
-    prop <- as.data.frame(prop.table(nums_cluster, margin = 1))
-    nums_cluster <- as.data.frame(nums_cluster)
+  })
 
-    # Merge and clean column names
-    props <- merge(nums_cluster, prop, by = c("Var1", "Var2"))
-    colnames(props) <- c(id, cluster, paste0("num_", cluster), "prop")
+  # Capture final unique values
+  final_levels <- purrr::map(df[columns], function(col) {
+    if (is.character(col) || is.factor(col) || is.logical(col)) {
+      unique(col)
+    } else {
+      NULL
+    }
+  })
 
-    props
+  # Compare and issue warnings if data loss occurred
+  info_loss <- purrr::imap(original_levels, function(orig_values, col_name) {
+    final_values <- final_levels[[col_name]]
+    if (!is.null(orig_values) && length(orig_values) > 1 &&
+        length(final_values) == 1) {
+      paste0("Column '", col_name, "' had ", length(orig_values),
+             " unique values but was summarized to ", length(final_values), ".")
+    } else {
+      NULL
+    }
+  }) %>%
+    purrr::compact()
+
+  if (length(info_loss) > 0) {
+    warning(paste(info_loss, collapse = "\n"))
   }
 
-  # Ensure column types conform to original data
-  props[[id]] <- as(props[[id]], class(data[[id]]))
-  props[[cluster]] <- as(props[[cluster]], class(data[[cluster]]))
-  if (!is.null(supercluster)) {
-    props[[supercluster]] <- as(props[[supercluster]],
-                                class(data[[supercluster]]))
-  }
-
-  # Summarize other columns by id
-  other_columns <- setdiff(names(data), required_cols)
-  if (add_other_cols && length(other_columns) > 0) {
-    df <- summarize_by_group(data, id, other_columns)
-    props <- dplyr::left_join(props, df, by = id)
-  }
-
-  return(props)
+  return(df)
 }

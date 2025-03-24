@@ -7,11 +7,11 @@
 summarize_by_group(data, group, columns = NULL)
 }
 \arguments{
-\item{data}{A data frame.}
+\item{data}{Data frame containing \code{group} and \code{columns}.}
 
-\item{group}{A character vector specifying the grouping column(s).}
+\item{group}{Character. Vector specifying the grouping column(s).}
 
-\item{columns}{Optional character vector specifying columns to summarize.}
+\item{columns}{Character. Vector specifying column(s) to summarize. Optional.}
 }
 \value{
 A data frame with summarized data.

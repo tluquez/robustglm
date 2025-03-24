@@ -9,6 +9,7 @@ get_props(
   id,
   cluster,
   supercluster = NULL,
+  by = NULL,
   add_supercluster_prop = F,
   add_other_cols = T
 )
@@ -16,17 +17,21 @@ get_props(
 \arguments{
 \item{data}{Data frame containing \code{id} and \code{cluster}.}
 
-\item{id}{The column name representing the observations identifier.}
+\item{id}{Character. Column name representing the observations identifier.}
 
-\item{cluster}{The column name representing the cluster identifier.}
+\item{cluster}{Character. Column name representing the cluster identifier.}
 
-\item{supercluster}{Optional. The column name representing the supercluster
-identifier.}
+\item{supercluster}{Character. Column name representing the supercluster
+identifier. Optional.}
 
-\item{add_supercluster_prop}{Logical indicating whether to
-include proportions per id across superclusters.}
+\item{by}{Character. Column name(s) of grouping variables, a.k.a.
+denominators for proportions. Optional.}
 
-\item{add_other_cols}{Logical indicating whether to summarize other columns of \code{data} by \code{id}. Numeric columns are summarized to their mean, factor to the reference level and character to the mode.}
+\item{add_supercluster_prop}{Logical indicating whether to include
+proportions per id across superclusters.}
+
+\item{add_other_cols}{Logical indicating whether to summarize other columns of \code{data} by \code{c(id, supercluster, by)}. Numeric columns are summarized
+to their mean, factor to the reference level and character to the mode.}
 }
 \value{
 A long data frame with computed proportions per group and summary
@@ -36,15 +41,13 @@ statistics.
 \item \code{"props"}: The proportions of each group combination within its
 supercluster.
 \item \code{"supercluster"}: The supercluster associated with each group.
-\item \code{"num_supercluster"}: The total number of occurrences of each
-\code{supercluster}-\code{id} combination.
 }
 }
 \description{
 This function computes proportions per id across cluster. It can group by
-supercluster and compute proportions per group. It can also add
+supercluster and compute proportions per group(s). It can also add
 supercluster proportions across all its levels. Finally, it summarizes
-other columns of data per id.
+other columns of data per grouping columns.
 }
 \details{
 This function calculates proportions per group based on the counts of another
