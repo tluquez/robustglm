@@ -85,14 +85,15 @@ get_props <- function(data, id, cluster, supercluster = NULL, by = NULL,
   # Count cells and compute proportions
   margins <- setdiff(groups, cluster)
   n_cluster <- table(data[groups])
-  prop <- as.data.frame(prop.table(n_cluster, margin = margins))
-  n_cluster <- as.data.frame(n_cluster)
+  prop <- as.data.frame(prop.table(n_cluster, margin = margins),
+                        stringsAsFactors = F)
+  n_cluster <- as.data.frame(n_cluster, stringsAsFactors = F)
   colnames(prop)[colnames(prop) == "Freq"] <- "prop"
   colnames(n_cluster)[colnames(n_cluster) == "Freq"] <- paste0("num_", cluster)
   props <- merge(n_cluster, prop, by = groups)
 
   # Exclude non-existing combinations
-  props <- props[!is.nan(props$prop) & !is.nan(props$prop), ]
+  props <- props[!is.nan(props$prop), ]
 
   if (!is.null(supercluster) & add_supercluster_prop) {
     # Count cells per id across superclusters and compute proportions
@@ -105,15 +106,14 @@ get_props <- function(data, id, cluster, supercluster = NULL, by = NULL,
     margins_supercluster <- setdiff(groups_supercluster, supercluster)
     n_supercluster <- table(data[groups_supercluster])
     prop_supercluster <- as.data.frame(prop.table(
-      n_supercluster, margin = margins_supercluster))
-    n_supercluster <- as.data.frame(n_supercluster)
+      n_supercluster, margin = margins_supercluster), stringsAsFactors = F)
+    n_supercluster <- as.data.frame(n_supercluster, stringsAsFactors = F)
     colnames(prop_supercluster)[colnames(prop_supercluster) == "Freq"] <- "prop"
     props_supercluster <- merge(n_supercluster, prop_supercluster,
                                 by = groups_supercluster)
 
     # Exclude non-existing combinations
-    props_supercluster <- props_supercluster[
-      !is.nan(props_supercluster$prop) & !is.nan(props_supercluster$prop), ]
+    props_supercluster <- props_supercluster[!is.nan(props_supercluster$prop), ]
 
     # Add supercluster proportions as tho they are cluster props
     colnames(props_supercluster)[colnames(props_supercluster) == "Freq"] <-
@@ -124,20 +124,21 @@ get_props <- function(data, id, cluster, supercluster = NULL, by = NULL,
     props <- rbind(props, props_supercluster, make.row.names = F)
   }
 
-  # Convert columns to original class
-  props[[id]] <- as(props[[id]], class(data[[id]]))
-  props[[cluster]] <- as(props[[cluster]], class(data[[cluster]]))
-  if (!is.null(supercluster)) {
-    props[[supercluster]] <- as(props[[supercluster]],
-                                class(data[[supercluster]]))
-  }
+  # Restore column to original class
+  props <- restore_class(props, data, groups)
+  # props[[id]] <- as(props[[id]], class(data[[id]]))
+  # props[[cluster]] <- as(props[[cluster]], class(data[[cluster]]))
+  # if (!is.null(supercluster)) {
+  #   props[[supercluster]] <- as(props[[supercluster]],
+  #                               class(data[[supercluster]]))
+  # }
 
   # Add other columns if required, excluding grouping columns
   if (add_other_cols) {
     other_columns <- setdiff(names(data), groups)
     if (length(other_columns) > 0) {
       df <- summarize_by_group(data, groups, other_columns)
-      props <- merge(props, df, by = id)
+      props <- merge(props, df, by = groups)
     }
   }
 
@@ -145,7 +146,7 @@ get_props <- function(data, id, cluster, supercluster = NULL, by = NULL,
 
   ## Ensure no new non-zero id-cluster combinations were created
   original_combs <- dplyr::distinct(data[groups])
-  result_combs <- props[props[paste0("num_", cluster)] > 0, groups]
+  result_combs <- props[props[[paste0("num_", cluster)]] > 0, groups]
   if (!is.null(supercluster) & add_supercluster_prop) {
     result_combs <- result_combs[result_combs[supercluster] != supercluster,
                                  groups]
@@ -319,5 +320,84 @@ summarize_by_group <- function(data, group, columns = NULL) {
     warning(paste(info_loss, collapse = "\n"))
   }
 
+  return(df)
+}
+
+restore_class <- function(df, reference_df, columns) {
+  for (col in columns) {
+    if (col %in% names(reference_df) && col %in% names(df)) {
+      original_class <- class(reference_df[[col]])
+      current_class <- class(df[[col]])
+
+      tryCatch({
+        withCallingHandlers({
+          if ("factor" %in% original_class) {
+            # Ensure factor levels are retained
+            df[[col]] <- factor(df[[col]], levels = levels(reference_df[[col]]))
+
+          } else if ("character" %in% original_class) {
+            # Convert to character safely
+            df[[col]] <- as.character(df[[col]])
+
+          } else if (any(c("numeric", "integer") %in% original_class)) {
+            # Convert safely to numeric, avoiding NA coercion
+            if ("factor" %in% current_class) {
+              df[[col]] <- as.numeric(as.character(df[[col]]))
+            } else if ("character" %in% current_class) {
+              if (all(suppressWarnings(!is.na(as.numeric(df[[col]]))))) {
+                df[[col]] <- as.numeric(df[[col]])
+              } else {
+                stop("Values coerced to NA when converting to original class. ",
+                     "If add_supercluster_prop = T and '", col,
+                     "' is numeric, consider coverting it to character.")
+              }
+            } else {
+              df[[col]] <- as.numeric(df[[col]])
+            }
+
+          } else if (any(c("Date", "POSIXt") %in% original_class)) {
+            # Convert character or factor back to Date safely
+            if (any(c("character", "factor") %in% current_class)) {
+              parsed_dates <- as.Date(as.character(df[[col]]),
+                                      format = "%Y-%m-%d")
+              if (any(is.na(parsed_dates) & !is.na(df[[col]]))) {
+                stop(paste("Column", col, "contains invalid date values."))
+              }
+              df[[col]] <- parsed_dates
+            } else {
+              df[[col]] <- as(reference_df[[col]], original_class)
+            }
+
+          } else if ("logical" %in% original_class) {
+            # Convert to logical safely
+            if ("factor" %in% current_class || "character" %in% current_class) {
+              logical_vals <- as.logical(as.character(df[[col]]))
+              if (any(is.na(logical_vals) & !df[[col]] %in%
+                      c("TRUE", "FALSE", "T", "F", "1", "0"))) {
+                stop(paste("Column", col, "contains non-logical values."))
+              }
+              df[[col]] <- logical_vals
+            } else {
+              df[[col]] <- as.logical(df[[col]])
+            }
+
+          } else if (any(c("list", "complex") %in% original_class)) {
+            # Convert list or complex to character
+            df[[col]] <- as.character(df[[col]])
+
+          } else {
+            # Preserve any other class
+            df[[col]] <- as(df[[col]], original_class)
+          }
+        }, warning = function(w) {
+          stop(paste("Warning treated as error in column:", col, ":",
+                     conditionMessage(w)))
+        })
+      }, error = function(e) {
+        message("Error in column ", col, ": ", conditionMessage(e))
+        next  # Skip to the next column if an error occurs
+      })
+    }
+  }
   return(df)
 }
