@@ -60,6 +60,13 @@ get_props <- function(data, id, cluster, supercluster = NULL, by = NULL,
     stop("No supercluster column provided when add_supercluster_prop == TRUE.")
   }
 
+  if (add_other_cols & add_supercluster_prop) {
+    stop("Cannot set both add_other_cols = TRUE and ",
+         "add_supercluster_prop = TRUE, as new cluster and supercluster keys ",
+         "may cause incorrect summaries or NAs. Set add_other_cols = FALSE ",
+         "and run summarize_by_group() separately.")
+  }
+
   # Respect existing groups when called in a dplyr pipeline
   if (dplyr::is_grouped_df(data)) {
     if (is.null(by)) {
@@ -90,7 +97,7 @@ get_props <- function(data, id, cluster, supercluster = NULL, by = NULL,
   n_cluster <- as.data.frame(n_cluster, stringsAsFactors = F)
   colnames(prop)[colnames(prop) == "Freq"] <- "prop"
   colnames(n_cluster)[colnames(n_cluster) == "Freq"] <- paste0("num_", cluster)
-  props <- merge(n_cluster, prop, by = groups)
+  props <- dplyr::full_join(n_cluster, prop, by = groups)
 
   # Exclude non-existing combinations
   props <- props[!is.nan(props$prop), ]
@@ -101,7 +108,8 @@ get_props <- function(data, id, cluster, supercluster = NULL, by = NULL,
       groups_supercluster <- setdiff(groups, cluster)
     } else {
       # For consistency, ensure id and supercluster are the first two variables
-      groups_supercluster <- c(id, supercluster, setdiff(groups, c(id, cluster)))
+      groups_supercluster <- c(id, supercluster, setdiff(groups,
+                                                         c(id, cluster)))
     }
     margins_supercluster <- setdiff(groups_supercluster, supercluster)
     n_supercluster <- table(data[groups_supercluster])
@@ -109,8 +117,8 @@ get_props <- function(data, id, cluster, supercluster = NULL, by = NULL,
       n_supercluster, margin = margins_supercluster), stringsAsFactors = F)
     n_supercluster <- as.data.frame(n_supercluster, stringsAsFactors = F)
     colnames(prop_supercluster)[colnames(prop_supercluster) == "Freq"] <- "prop"
-    props_supercluster <- merge(n_supercluster, prop_supercluster,
-                                by = groups_supercluster)
+    props_supercluster <- dplyr::full_join(n_supercluster, prop_supercluster,
+                                           by = groups_supercluster)
 
     # Exclude non-existing combinations
     props_supercluster <- props_supercluster[!is.nan(props_supercluster$prop), ]
@@ -126,19 +134,13 @@ get_props <- function(data, id, cluster, supercluster = NULL, by = NULL,
 
   # Restore column to original class
   props <- restore_class(props, data, groups)
-  # props[[id]] <- as(props[[id]], class(data[[id]]))
-  # props[[cluster]] <- as(props[[cluster]], class(data[[cluster]]))
-  # if (!is.null(supercluster)) {
-  #   props[[supercluster]] <- as(props[[supercluster]],
-  #                               class(data[[supercluster]]))
-  # }
 
   # Add other columns if required, excluding grouping columns
   if (add_other_cols) {
-    other_columns <- setdiff(names(data), groups)
-    if (length(other_columns) > 0) {
-      df <- summarize_by_group(data, groups, other_columns)
-      props <- merge(props, df, by = groups)
+    columns_to_summarize <- setdiff(names(data), groups)
+    if (length(columns_to_summarize) > 0) {
+      df <- summarize_by_group(data, groups, columns_to_summarize)
+      props <- dplyr::left_join(props, df, by = groups)
     }
   }
 
