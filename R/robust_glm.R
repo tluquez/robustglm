@@ -167,9 +167,10 @@ get_covs <- function(formula) {
 
 #' @export
 predict.robust_glm <- function(object, newdata = NULL,
-                               type = c("link", "response"), se.fit = FALSE,
-                               sandwich = TRUE,
-                               interval = c("none", "confidence"), level = 0.95,
+                               type = c("link", "response"),
+                               se.fit = FALSE, sandwich = TRUE,
+                               interval = c("none", "confidence"),
+                               level = 0.95,
                                ...) {
   type <- match.arg(type)
   interval <- match.arg(interval)
@@ -185,24 +186,47 @@ predict.robust_glm <- function(object, newdata = NULL,
   # Get model matrix
   X <- model.matrix(object$formula, newdata)
 
-  # Use base predict.glm to get predictions
-  preds <- stats::predict.glm(object, newdata = newdata,
-                              type = type, se.fit = se.fit, ...)
+  # Use base predict.glm to get linear predictor
+  pred_link <- stats::predict.glm(object, newdata = newdata,
+                                  type = "link", se.fit = FALSE, ...)
 
-  # Add robust standard errors and confidence intervals
+  fit <- if (type == "response") {
+    family <- object$family$family
+    linkinv <- object$family$linkinv
+
+    if (is.null(linkinv)) {
+      stop("Unsupported family/link function.")
+    }
+    linkinv(pred_link)
+  } else {
+    pred_link
+  }
+
   if (se.fit && sandwich && !is.null(object$vcov_mat)) {
-    # Delta method robust standard errors
-    se <- sqrt(rowSums((X %*% object$vcov_mat) * X))
-    preds$se.fit <- se
+    V <- object$vcov_mat
+    se_link <- sqrt(diag(X %*% V %*% t(X)))
+
+    if (type == "link") {
+      se_final <- se_link
+    } else if (type == "response") {
+      # Delta method: derivative of inverse link
+      mu <- object$family$linkinv(pred_link)
+      dlinkinv <- mu * (1 - mu) # derivative for logistic
+      se_final <- dlinkinv * se_link
+    }
+
+    result <- list(fit = fit, se.fit = se_final)
 
     if (interval == "confidence") {
       z <- qnorm((1 + level) / 2)
-      preds$conf.low <- preds$fit - z * se
-      preds$conf.high <- preds$fit + z * se
+      result$conf.low <- fit - z * se_final
+      result$conf.high <- fit + z * se_final
     }
+
+    return(result)
   }
 
-  return(preds)
+  return(fit)
 }
 
 #' Get Predicted Values from a Model
