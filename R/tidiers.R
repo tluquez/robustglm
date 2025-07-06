@@ -60,8 +60,10 @@ tidy_terms <- function(model, id = NULL, exponentiate = F) {
     if (!inherits(mod, c("lm", "glm"))) {
       stop("model must be a valid 'lm' or 'glm' object.")
     }
-    if (!inherits(mod, "robust_glm")) {
-      stop("model must be of class 'robust_glm'.")
+    if (inherits(mod, "glm")) {
+      if (!inherits(mod, "robust_glm")) {
+        stop("model must be of class 'robust_glm'.")
+      }
     }
 
     # Check if mod contains ci and sandwich, and they are not NA
@@ -141,25 +143,30 @@ tidy_model <- function(model, id = NULL, ...) {
   if (inherits(model, c("lm", "glm"))) {
     model <- list(model)
   }
-
+  
   # Check if model contains at least one model object
   if (length(model) == 0) {
     stop("Model must contain at least one model object.")
   }
-
+  
   # Tidy summary statistics for each model object and combine results
   mods_df <- purrr::map_dfr(model, function(mod) {
     # Check if mod is a valid model object
-    if (!inherits(mod, "lm") && !inherits(mod, "glm")) {
-      stop("Model must be a valid 'lm' or 'glm' object.")
+    if (!inherits(mod, c("lm", "glm"))) {
+      stop("model must be a valid 'lm' or 'glm' object.")
     }
-    if (!inherits(mod, "robust_glm")) {
-      stop("model must be of class 'robust_glm'.")
+    if (inherits(mod, "glm")) {
+      if (!inherits(mod, "robust_glm")) {
+        stop("model must be of class 'robust_glm'.")
+      }
     }
-
+    
     # Extract summary statistics from the model object
     summary_stats <- list(
-      converged = tryCatch(mod$converged, error = function(e) NA),
+      converged = tryCatch(
+        if ("converged" %in% names(mod)) mod$converged else NA,
+        error = function(e) NA
+      ),
       dispersion = tryCatch(
         if ("dispersion" %in% names(summary(mod))) summary(mod)$dispersion else NA,
         error = function(e) NA
@@ -182,10 +189,10 @@ tidy_model <- function(model, id = NULL, ...) {
     glance_df <- tryCatch(broom::glance(mod, ...), error = function(e) NA)
     if (!is.null(glance_df)) summary_stats <- c(as.list(glance_df),
                                                 summary_stats)
-
+    
     # Combine summary statistics into a data frame
     tibble::as_tibble(summary_stats)
   }, .id = id)
-
+  
   return(mods_df)
 }
