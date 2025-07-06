@@ -143,12 +143,12 @@ tidy_model <- function(model, id = NULL, ...) {
   if (inherits(model, c("lm", "glm"))) {
     model <- list(model)
   }
-  
+
   # Check if model contains at least one model object
   if (length(model) == 0) {
     stop("Model must contain at least one model object.")
   }
-  
+
   # Tidy summary statistics for each model object and combine results
   mods_df <- purrr::map_dfr(model, function(mod) {
     # Check if mod is a valid model object
@@ -160,7 +160,7 @@ tidy_model <- function(model, id = NULL, ...) {
         stop("model must be of class 'robust_glm'.")
       }
     }
-    
+
     # Extract summary statistics from the model object
     summary_stats <- list(
       converged = tryCatch(
@@ -189,10 +189,10 @@ tidy_model <- function(model, id = NULL, ...) {
     glance_df <- tryCatch(broom::glance(mod, ...), error = function(e) NA)
     if (!is.null(glance_df)) summary_stats <- c(as.list(glance_df),
                                                 summary_stats)
-    
+
     # Combine summary statistics into a data frame
     tibble::as_tibble(summary_stats)
   }, .id = id)
-  
+
   return(mods_df)
 }
